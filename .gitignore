@@ -1,0 +1,27 @@
+# ===== Secrets (NEVER commit) =====
+.env
+*.env
+backend/.env
+**/connector_config.json
+*.key
+*.pem
+secrets.json
+
+# ===== Local data / DB =====
+backend/data/
+
+# ===== Python =====
+backend/.venv/
+.venv/
+__pycache__/
+*.pyc
+
+# ===== Node / frontend =====
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+*.tsbuildinfo
+
+# ===== Editor =====
+.vscode/
+.idea/
