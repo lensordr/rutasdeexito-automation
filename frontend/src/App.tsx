@@ -33,11 +33,29 @@ export default function App() {
         </div>
 
         <nav className="space-y-1">
-          <SideLink to="/" label="Orders" end />
-          <SideLink to="/fleet" label="Fleet" />
-          <SideLink to="/clients" label="Clients" />
-          <SideLink to="/connectors" label="Connectors & Settings" />
+          <SideLink to="/" label="Pedidos" end />
+          <SideLink to="/intake" label="📱 Entrada WhatsApp" />
+          <SideLink to="/fleet" label="Flota" />
+          <SideLink to="/clients" label="Clientes / Ubicaciones" />
+          <SideLink to="/connectors" label="Conectores" />
         </nav>
+
+        {/* Client form link */}
+        <div className="mt-6 rounded-lg border border-dashed border-slate-600 p-3">
+          <p className="mb-1 text-xs font-semibold text-slate-400">Enlace para clientes</p>
+          <p className="mb-2 text-xs text-slate-500">
+            Comparte este enlace por WhatsApp para que los clientes hagan pedidos directamente.
+          </p>
+          <button
+            onClick={() => {
+              const url = `${window.location.origin}/pedido?t=rutas2024`;
+              navigator.clipboard.writeText(url);
+            }}
+            className="w-full rounded-lg bg-green-700/40 border border-green-700 px-3 py-2 text-xs font-medium text-green-300 hover:bg-green-700/60 transition"
+          >
+            📋 Copiar enlace
+          </button>
+        </div>
 
         <div className="mt-auto flex items-center gap-2 px-3 pt-6 text-[11px] text-slate-500">
           <span className="h-1.5 w-1.5 rounded-full bg-brand-600" />

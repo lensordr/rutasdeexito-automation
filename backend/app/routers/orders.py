@@ -1,6 +1,7 @@
 """Orders: CRUD, email intake, assignment suggestions, confirm, lifecycle."""
 from __future__ import annotations
 
+import math
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,12 +14,12 @@ from ..models import (
     AssignmentStatus,
     Client,
     Driver,
+    DriverStatus,
     Order,
     OrderStatus,
     Trailer,
     Truck,
     TruckStatus,
-    DriverStatus,
 )
 from ..schemas import (
     AssignmentRead,
@@ -31,6 +32,26 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api", tags=["orders"])
 CID = settings.default_company_id
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return round(r * 2 * math.asin(math.sqrt(a)), 1)
+
+
+def _fill_distance(order: Order, db: Session) -> None:
+    """Auto-populate distance_km from registry clients if both are set."""
+    if order.pickup_location_id and order.dropoff_location_id:
+        orig = db.get(Client, order.pickup_location_id)
+        dest = db.get(Client, order.dropoff_location_id)
+        if orig and dest and None not in (orig.lat, orig.lng, dest.lat, dest.lng):
+            order.distance_km = _haversine_km(orig.lat, orig.lng, dest.lat, dest.lng)
+            # Also back-fill the free-text fields for display
+            order.pickup_location = f"{orig.name} ({orig.postal_code})"
+            order.dropoff_location = f"{dest.name} ({dest.postal_code})"
 
 
 # -------------------------------- CRUD ------------------------------------- #
@@ -47,6 +68,7 @@ def list_orders(db: Session = Depends(get_db)):
 @router.post("/orders", response_model=OrderRead)
 def create_order(body: OrderCreate, db: Session = Depends(get_db)):
     obj = Order(company_id=CID, **body.model_dump())
+    _fill_distance(obj, db)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -68,6 +90,7 @@ def update_order(order_id: int, body: OrderUpdate, db: Session = Depends(get_db)
         raise HTTPException(404, "Order not found")
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(obj, k, v)
+    _fill_distance(obj, db)
     db.commit()
     db.refresh(obj)
     return obj
@@ -167,6 +190,9 @@ def confirm_assignment(
         trailer_id=body.trailer_id,
         driver_id=body.driver_id,
         status=AssignmentStatus.CONFIRMED,
+        price_per_km=body.price_per_km,
+        price_total=body.price_total,
+        dispatcher_notes=body.dispatcher_notes,
     )
     db.add(assignment)
 

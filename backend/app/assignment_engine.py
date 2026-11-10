@@ -4,14 +4,12 @@ Assignment engine.
 Given an Order, produce a ranked list of candidate (truck, trailer, driver)
 combinations. Scoring combines four factors:
 
-    1. Capability  - the trailer CAN carry the order's product type.  (hard gate)
-    2. Capacity    - tonnage and volume fit within the trailer.        (hard gate)
-    3. Proximity   - truck's last-known GPS position vs pickup point.  (soft score)
-    4. Availability- truck + driver statuses.                          (soft score)
-
-Hard gates eliminate impossible combos; soft factors rank the rest.
-The final score is 0..1 (higher is better). All of this is deterministic and
-easy to tune - the weights live in ``WEIGHTS``.
+    1. Capability      - trailer CAN carry the product type.        (hard gate)
+    2. Capacity        - tonnage/volume fit the trailer.            (hard gate)
+    3. Trailer type    - trailer type matches order requirement.    (hard gate)
+    4. Proximity       - truck distance to pickup point.            (soft score)
+    5. Availability    - truck + driver status.                     (soft score)
+    6. Qualification   - driver route type + trailer type match.   (score penalty)
 """
 from __future__ import annotations
 
@@ -23,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from .connectors.registry import registry
 from .models import (
+    Client,
     Driver,
     DriverStatus,
     Order,
@@ -31,13 +30,11 @@ from .models import (
     TruckStatus,
 )
 
-# Tunable weights for the soft factors (must sum to 1.0).
 WEIGHTS = {
     "proximity": 0.6,
     "availability": 0.4,
 }
 
-# Distance (km) beyond which proximity score is ~0. Tune per operating region.
 MAX_USEFUL_DISTANCE_KM = 800.0
 
 
@@ -52,7 +49,6 @@ class Candidate:
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    """Great-circle distance between two lat/lng points in kilometres."""
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp = math.radians(lat2 - lat1)
@@ -68,18 +64,41 @@ def _trailer_can_carry(trailer: Trailer, order: Order) -> tuple[bool, str]:
     if allowed and product and product not in allowed:
         return False, f"trailer {trailer.identifier} cannot carry '{product}'"
     if trailer.max_tonnage and order.tonnage and order.tonnage > trailer.max_tonnage:
-        return False, (
-            f"tonnage {order.tonnage}t exceeds trailer max {trailer.max_tonnage}t"
-        )
-    if (
-        trailer.max_volume_m3
-        and order.volume_m3
-        and order.volume_m3 > trailer.max_volume_m3
-    ):
-        return False, (
-            f"volume {order.volume_m3}m³ exceeds trailer max {trailer.max_volume_m3}m³"
-        )
+        return False, f"tonnage {order.tonnage}t exceeds trailer max {trailer.max_tonnage}t"
+    if trailer.max_volume_m3 and order.volume_m3 and order.volume_m3 > trailer.max_volume_m3:
+        return False, f"volume {order.volume_m3}m³ exceeds trailer max {trailer.max_volume_m3}m³"
     return True, "ok"
+
+
+def _trailer_matches_type(trailer: Trailer, order: Order) -> tuple[bool, str]:
+    """Hard gate: trailer type must match what the order requires."""
+    required = (order.trailer_type_required or "").strip().lower()
+    if not required:
+        return True, "no trailer type required"
+    trailer_t = (trailer.trailer_type or "").strip().lower()
+    piston_t = (trailer.piston_type or "").strip().lower()
+    if required in trailer_t or required in piston_t:
+        return True, "trailer type matches"
+    return False, f"order requires '{required}' but trailer is '{trailer_t}'"
+
+
+def _driver_matches_route(driver: Optional[Driver], order: Order) -> bool:
+    if driver is None:
+        return True
+    order_route = (order.route_type or "local").strip().lower()
+    if driver.route_type.value == "both":
+        return True
+    return driver.route_type.value == order_route
+
+
+def _driver_matches_trailer(driver: Optional[Driver], trailer: Optional[Trailer]) -> bool:
+    if driver is None or trailer is None:
+        return True
+    preferred = driver.trailer_type_list()
+    if not preferred:
+        return True
+    trailer_t = (trailer.trailer_type or "").strip().lower()
+    return any(p in trailer_t or trailer_t in p for p in preferred)
 
 
 def _availability_score(truck: Truck, driver: Optional[Driver]) -> float:
@@ -87,20 +106,19 @@ def _availability_score(truck: Truck, driver: Optional[Driver]) -> float:
     if driver is not None:
         score = score * (1.0 if driver.status == DriverStatus.AVAILABLE else 0.3)
     else:
-        score *= 0.5  # no driver chosen yet - penalize mildly
+        score *= 0.5
     return score
 
 
 def _proximity_score(distance_km: Optional[float]) -> float:
     if distance_km is None:
-        return 0.3  # unknown position - neutral-ish
+        return 0.3
     if distance_km >= MAX_USEFUL_DISTANCE_KM:
         return 0.0
     return 1.0 - (distance_km / MAX_USEFUL_DISTANCE_KM)
 
 
 def _truck_position(truck: Truck, positions: dict[str, tuple[float, float]]):
-    """Resolve a truck's current (lat,lng) from GPS, falling back to home base."""
     if truck.gps_device_id and truck.gps_device_id in positions:
         return positions[truck.gps_device_id]
     if truck.home_lat is not None and truck.home_lng is not None:
@@ -111,7 +129,6 @@ def _truck_position(truck: Truck, positions: dict[str, tuple[float, float]]):
 def suggest_assignments(
     db: Session, order: Order, company_id: int, top_n: int = 5
 ) -> list[Candidate]:
-    """Return the top-N ranked candidate assignments for an order."""
     trucks = db.query(Truck).filter(Truck.company_id == company_id).all()
     trailers = {
         t.id: t
@@ -122,7 +139,7 @@ def suggest_assignments(
         d.truck_id: d for d in drivers if d.truck_id is not None
     }
 
-    # Pull live GPS positions once (stub for now) keyed by device id.
+    # Live GPS positions (stub returns random coords — falls back to home base)
     positions: dict[str, tuple[float, float]] = {}
     try:
         for p in registry.gps().get_positions():
@@ -130,10 +147,18 @@ def suggest_assignments(
     except Exception:
         pass
 
+    # Resolve pickup coordinates from client/location registry if available
+    pickup_lat: Optional[float] = order.pickup_lat
+    pickup_lng: Optional[float] = order.pickup_lng
+    if order.pickup_location_id and pickup_lat is None:
+        loc = db.get(Client, order.pickup_location_id)
+        if loc:
+            pickup_lat = loc.lat
+            pickup_lng = loc.lng
+
     candidates: list[Candidate] = []
+
     for truck in trucks:
-        # Choose the trailer: truck's default if set, else any active trailer
-        # that can carry the order (pick the best-fitting).
         trailer_options: list[Trailer]
         if truck.default_trailer_id and truck.default_trailer_id in trailers:
             trailer_options = [trailers[truck.default_trailer_id]]
@@ -141,42 +166,59 @@ def suggest_assignments(
             trailer_options = [t for t in trailers.values() if t.active]
 
         best_for_truck: Optional[Candidate] = None
+
         for trailer in trailer_options:
+            # Hard gate 1: product capability + capacity
             ok, why = _trailer_can_carry(trailer, order)
             if not ok:
                 continue
 
-            # Distance from truck position to pickup.
+            # Hard gate 2: trailer type required by order
+            ok_type, why_type = _trailer_matches_type(trailer, order)
+            if not ok_type:
+                continue
+
+            # Distance from truck to pickup
             distance_km = None
             pos = _truck_position(truck, positions)
-            if pos and order.pickup_lat is not None and order.pickup_lng is not None:
-                distance_km = round(
-                    haversine_km(pos[0], pos[1], order.pickup_lat, order.pickup_lng), 1
-                )
+            if pos and pickup_lat is not None and pickup_lng is not None:
+                distance_km = round(haversine_km(pos[0], pos[1], pickup_lat, pickup_lng), 1)
 
             driver = driver_by_truck.get(truck.id)
+
+            # Soft qualification penalties
+            route_match = _driver_matches_route(driver, order)
+            trailer_match = _driver_matches_trailer(driver, trailer)
+            qualification_factor = 1.0
+            if not route_match:
+                qualification_factor *= 0.5
+            if not trailer_match:
+                qualification_factor *= 0.7
+
             prox = _proximity_score(distance_km)
             avail = _availability_score(truck, driver)
             score = round(
-                WEIGHTS["proximity"] * prox + WEIGHTS["availability"] * avail, 4
+                (WEIGHTS["proximity"] * prox + WEIGHTS["availability"] * avail) * qualification_factor,
+                4,
             )
 
+            notes = []
+            if not route_match and driver:
+                notes.append(f"⚠ conductor ruta {driver.route_type.value} vs pedido {order.route_type}")
+            if not trailer_match and driver:
+                notes.append(f"⚠ conductor no habilitado para {trailer.trailer_type}")
+
             reason = (
-                f"{trailer.trailer_type} trailer {trailer.identifier} can carry "
-                f"'{order.product}'; "
-                + (f"{distance_km} km from pickup; " if distance_km is not None
-                   else "distance unknown; ")
-                + f"truck {truck.status.value}"
-                + (f", driver {driver.status.value}" if driver else ", no driver set")
+                f"{trailer.trailer_type} {trailer.identifier} · '{order.product}'"
+                + (f" · {distance_km} km" if distance_km is not None else " · distancia desconocida")
+                + f" · camión {truck.status.value}"
+                + (f" · conductor {driver.status.value}" if driver else " · sin conductor")
+                + ((" · " + "; ".join(notes)) if notes else "")
             )
 
             cand = Candidate(
-                truck=truck,
-                trailer=trailer,
-                driver=driver,
-                score=score,
-                distance_km=distance_km,
-                reason=reason,
+                truck=truck, trailer=trailer, driver=driver,
+                score=score, distance_km=distance_km, reason=reason,
             )
             if best_for_truck is None or cand.score > best_for_truck.score:
                 best_for_truck = cand

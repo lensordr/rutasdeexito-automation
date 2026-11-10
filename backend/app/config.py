@@ -40,5 +40,9 @@ class Settings:
     # Single-company default for the local build.
     default_company_id: int = 1
 
+    # Token embedded in the public client intake URL.
+    # Change this to any random string to protect your form.
+    public_intake_token: str = os.getenv("DISPATCH_INTAKE_TOKEN", "rutas2024")
+
 
 settings = Settings()

@@ -27,21 +27,24 @@ def seed() -> None:
         db.add(Company(id=cid, name="Rutas de Éxito"))
 
         clients = [
-            Client(company_id=cid, name="Agro Supplies SL", email="ops@agro.example"),
-            Client(company_id=cid, name="BuildCo", email="logistics@buildco.example"),
+            Client(company_id=cid, name="Agro Supplies SL", nif_cif="B-12345678",
+                   email="ops@agro.example", phone="+34 600 000 001",
+                   postal_code="28001", city="Madrid", country="ES",
+                   address="Calle Mayor 1, 28001 Madrid", lat=40.4168, lng=-3.7038),
+            Client(company_id=cid, name="BuildCo", nif_cif="B-87654321",
+                   email="logistics@buildco.example", phone="+34 600 000 002",
+                   postal_code="08001", city="Barcelona", country="ES",
+                   address="Passeig de Gràcia 45, 08001 Barcelona", lat=41.3874, lng=2.1686),
         ]
         db.add_all(clients)
 
         trailers = [
             Trailer(company_id=cid, identifier="TR-100", trailer_type="tipper",
-                    allowed_products="grain,sand,gravel,cement",
-                    max_tonnage=30, max_volume_m3=40),
+                    allowed_products="", max_tonnage=0, max_volume_m3=0),
             Trailer(company_id=cid, identifier="TR-200", trailer_type="tanker",
-                    allowed_products="fuel,water,milk",
-                    max_tonnage=32, max_volume_m3=36),
+                    allowed_products="", max_tonnage=0, max_volume_m3=0),
             Trailer(company_id=cid, identifier="TR-300", trailer_type="curtain",
-                    allowed_products="pallets,boxes,machinery",
-                    max_tonnage=24, max_volume_m3=90),
+                    allowed_products="", max_tonnage=0, max_volume_m3=0),
         ]
         db.add_all(trailers)
         db.flush()  # get trailer ids

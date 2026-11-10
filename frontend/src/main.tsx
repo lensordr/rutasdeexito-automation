@@ -8,8 +8,13 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 import FleetPage from "./pages/FleetPage";
 import ClientsPage from "./pages/ClientsPage";
 import ConnectorsPage from "./pages/ConnectorsPage";
+import IntakePage from "./pages/IntakePage";
+import PublicIntakePage from "./pages/PublicIntakePage";
 
 const router = createBrowserRouter([
+  // Public client form — outside the app shell, no sidebar
+  { path: "/pedido", element: <PublicIntakePage /> },
+
   {
     path: "/",
     element: <App />,
@@ -18,6 +23,7 @@ const router = createBrowserRouter([
       { path: "orders/:orderId", element: <OrderDetailPage /> },
       { path: "fleet", element: <FleetPage /> },
       { path: "clients", element: <ClientsPage /> },
+      { path: "intake", element: <IntakePage /> },
       { path: "connectors", element: <ConnectorsPage /> },
     ],
   },

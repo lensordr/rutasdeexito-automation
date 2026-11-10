@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import connectors, gps, master_data, orders
+from .routers import connectors, gps, intake, master_data, orders
 from .seed import seed
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -25,6 +25,7 @@ app.add_middleware(
 
 app.include_router(master_data.router)
 app.include_router(orders.router)
+app.include_router(intake.router)
 app.include_router(gps.router)
 app.include_router(connectors.router)
 
